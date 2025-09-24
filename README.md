@@ -2,6 +2,9 @@
 
 ### Datasets (NCBI BioProject)
 
+Individual run-info information for each experiment can be found in the 
+[doc/](https://github.com/jcalendo/immuno-analysis/tree/main/doc) folder.
+
 - PRJNA312948 
     - Melanoma biopsies
     - anti-PD1 (Pembrolizumab)
@@ -45,6 +48,5 @@ custom genome using 30 Gibbs resamples correcting for GC, position, and seq bias
 the `--dumpEq` option. The Gibbs resampled counts are then imported into SummarizedExperiment
 objects using `rmskProfiler::importQuants()`. The resulting SummarizedExperiment objects are 
 serialized and saved in .rds formatted files for each experiment.
-
 
 
