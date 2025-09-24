@@ -1,0 +1,151 @@
+import pandas as pd
+from pathlib import Path
+
+
+configfile: "/home/gennaro/data/20250713_immuno-analysis/scripts/config.yaml"
+
+df = pd.read_csv("samples.csv")
+
+df_pe = df[df['read2'].notna()]
+SAMPLES_PE = df_pe['sample'].unique().tolist()
+RUNS_PE = df_pe['run'].unique().tolist()
+
+df_se = df[df['read2'].isna()]
+SAMPLES_SE = df_se['sample'].unique().tolist()
+RUNS_SE = df_se['run'].unique().tolist()
+
+PROJECT = df['bioproject'].unique().tolist()[0]
+
+WORK_DIR = f"/home/gennaro/data/20250713_immuno-analysis/data/{PROJECT}"
+FASTP_OUT = f"{WORK_DIR}/01_fastp"
+SALMON_OUT = f"{WORK_DIR}/02_salmon"
+RMSK_OUT = f"{WORK_DIR}/03_rmskProfiler"
+
+
+def get_pe_runs(wc):
+  """Collect trimmed PE reads for a sample for Salmon quant"""
+  sample_runs = df_pe[df_pe['sample'] == wc.sample].run.tolist()
+  r1l = [f"{FASTP_OUT}/{run}.trimmed.1.fq.gz" for run in sample_runs]
+  r2l = [f"{FASTP_OUT}/{run}.trimmed.2.fq.gz" for run in sample_runs]
+  return({'r1': r1l, 'r2': r2l})
+
+
+def get_se_runs(wc):
+  """Collect trimmed SE reads for a sample for Salmon quant"""
+  sample_runs = df_se[df_se['sample'] == wc.sample].run.tolist()
+  reads = [f"{FASTP_OUT}/{run}.trimmed.fq.gz" for run in sample_runs]
+  return reads
+
+
+rule all:
+  input:
+    f"{RMSK_OUT}/se.rds",
+    expand(f'{SALMON_OUT}/{{sample}}/quant.sf', sample=SAMPLES_PE),
+    expand(f'{SALMON_OUT}/{{sample}}/quant.sf', sample=SAMPLES_SE)
+
+
+rule fastp_pe:
+  input:
+    r1 = lambda w: df_pe.loc[df_pe.run == w.run, "read1"].item(),
+    r2 = lambda w: df_pe.loc[df_pe.run == w.run, "read2"].item()
+  output:
+    r1 = temp(f"{FASTP_OUT}/{{run}}.trimmed.1.fq.gz"),
+    r2 = temp(f"{FASTP_OUT}/{{run}}.trimmed.2.fq.gz"),
+    html = f"{FASTP_OUT}/{{run}}.fastp.html",
+    json = f"{FASTP_OUT}/{{run}}.fastp.json"
+  log:
+    f"{FASTP_OUT}/{{run}}_fastp.log"
+  params:
+    extra = "--detect_adapter_for_pe"
+  threads: 12
+  shell:
+    "fastp -i {input.r1} -I {input.r2} -o {output.r1} -O {output.r2} "
+    "{params.extra} --html {output.html} --json {output.json} --thread {threads} &> {log}"
+
+
+rule salmon_pe:
+  input:
+    unpack(get_pe_runs)
+  output:
+    quant_sf = f"{SALMON_OUT}/{{sample}}/quant.sf",
+  log:
+    f"{SALMON_OUT}/{{sample}}/salmon.log"
+  wildcard_constraints:
+    sample='|'.join(SAMPLES_PE) if SAMPLES_PE else '$^'
+  params:
+    salmon_index = config["salmon"]["index_dir"],
+    extra = config["salmon"]["extra_params"],
+    lib_type = config["salmon"]["lib_type"],
+    gibbs = config["salmon"]["gibbs"],
+    output_dir = f"{SALMON_OUT}/{{sample}}",
+    r1_str = lambda wildcards, input: " ".join(input.r1),
+    r2_str = lambda wildcards, input: " ".join(input.r2)
+  threads: 12
+  shell:
+    """
+    salmon quant \
+     --index {params.salmon_index} \
+     --libType {params.lib_type} \
+     --mates1 {params.r1_str} \
+     --mates2 {params.r2_str} \
+     --threads {threads} \
+     --numGibbsSamples {params.gibbs} \
+     --output {params.output_dir} {params.extra} &> {log}
+    """
+
+
+rule fastp_se:
+  input:
+    r1 = lambda w: df_se.loc[df_se.run == w.run, "read1"].item()
+  output:
+    r1 = temp(f"{FASTP_OUT}/{{run}}.trimmed.fq.gz"),
+    html = f"{FASTP_OUT}/{{run}}.fastp.html",
+    json = f"{FASTP_OUT}/{{run}}.fastp.json"
+  log:
+    f"{FASTP_OUT}/{{run}}_fastp.log"
+  threads: 12
+  shell:
+    "fastp -i {input.r1} -o {output.r1} "
+    "--html {output.html} --json {output.json} --thread {threads} &> {log}"
+
+
+rule salmon_se:
+  input:
+    get_se_runs
+  output:
+    quant_sf = f"{SALMON_OUT}/{{sample}}/quant.sf",
+  log:
+    f"{SALMON_OUT}/{{sample}}/salmon.log"
+  params:
+    salmon_index = config["salmon"]["index_dir"],
+    extra = config["salmon"]["extra_params"],
+    lib_type = config["salmon"]["lib_type"],
+    gibbs = config["salmon"]["gibbs"],
+    output_dir = f"{SALMON_OUT}/{{sample}}",
+    r_str = lambda wildcards, input: " ".join(input)
+  wildcard_constraints:
+    sample='|'.join(SAMPLES_SE) if SAMPLES_SE else '$^'
+  threads: 12
+  shell:
+    """
+    salmon quant \
+     --index {params.salmon_index} \
+     --libType {params.lib_type} \
+     --unmatedReads {params.r_str} \
+     --threads {threads} \
+     --numGibbsSamples {params.gibbs} \
+     --output {params.output_dir} {params.extra} &> {log}
+    """
+
+
+rule import_quants:
+  input:
+    pe_quants = expand(f'{SALMON_OUT}/{{sample}}/quant.sf', sample=SAMPLES_PE),
+    se_quants = expand(f'{SALMON_OUT}/{{sample}}/quant.sf', sample=SAMPLES_SE)
+  output:
+    out_dir = RMSK_OUT
+  params:
+    quant_dir = SALMON_OUT
+  shell:
+    "Rscript /home/gennaro/data/20250713_immuno-analysis/scripts/importQuants.R {params.quant_dir} {output.out_dir}"
+
