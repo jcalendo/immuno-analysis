@@ -1,0 +1,78 @@
+---
+title: PRJNA498500 Analysis
+format: html
+author: Gennaro Calendo
+---
+
+Import and prepare counts and sample metadata
+
+## Set up
+
+```{r}
+suppressPackageStartupMessages(library(here))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(SummarizedExperiment))
+suppressPackageStartupMessages(library(edgeR))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(patchwork))
+
+datafiles <- here("results", "PRJNA498500", "data-files", "01")
+figures <- here("results", "PRJNA498500", "figures", "01")
+rdsfiles <- here("results", "PRJNA498500", "rds-files", "01")
+
+invisible(sapply(c(datafiles, figures, rdsfiles), dir.create, showWarnings=F, recursive=T))
+```
+
+## Read in `rmskProfiler` counts
+
+```{r}
+se <- readRDS(here("data", "PRJNA498500", "03_rmskProfiler", "se.rds"))
+rowData(se)$Ranges <- NULL
+```
+
+## Read in metadata and align with SE
+
+```{r}
+metadata <- fread(here("doc", "PRJNA498500_SraRunTable.csv"))
+metadata <- janitor::clean_names(metadata)
+```
+
+Align with SE object and add as object metadata
+
+```{r}
+setDF(metadata, rownames=metadata$geo_accession_exp)
+metadata <- metadata[colnames(se), ]
+colData(se) <- cbind(colData(se), metadata)
+```
+
+This study does not actually have response RECIST categories. They simply report:
+
+>multi institution clinical trial to evaluate immune responses and survival following neoadjuvant and/or adjuvant therapy with pembrolizumab, a programmed cell death protein 1 (PD-1) monoclonal antibody, in 35 patients with recurrent, surgically resectable glioblastoma. Patients who were randomized to receive neoadjuvant pembrolizumab, with continued adjuvant therapy following surgery, had significantly extended overall survival compared to patients that were randomized to receive adjuvant, post-surgical PD-1 blockade alone (hazard ratio = 0.39; P = 0.04, log-rank test). Neoadjuvant PD-1 blockade was associated with upregulation of T cell and interferon-γ-related genes, but downregulation of cell cycle related genes within the tumor, which was not seen in patients that received adjuvant therapy alone.
+
+I think the only grouping I can use is the treatment given
+
+## Filter for expression
+
+```{r}
+keep <- filterByExpr(se, group=se$therapy)
+se <- se[keep, ]
+```
+
+## Compute TPM values
+
+Use lengths imported from `catchSalmon`
+
+```{r}
+feature_length <- metadata(se)$annotation[rownames(se), ]$Length
+x <- assay(se, "counts") / feature_length
+assay(se, "tpm") <- t( t(x) * 1e6 / colSums(x) )
+
+# Create log2 TPMs as well
+assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
+```
+
+## Save the final SE object for meta-analysis
+
+```{r}
+saveRDS(se, here(rdsfiles, "processed-se.rds"))
+```

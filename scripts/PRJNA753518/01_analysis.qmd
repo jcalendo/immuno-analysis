@@ -1,0 +1,95 @@
+---
+title: PRJNA753518 Analysis
+format: html
+author: Gennaro Calendo
+---
+
+Import and prepare counts and sample metadata
+
+## Set up
+
+```{r}
+suppressPackageStartupMessages(library(here))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(SummarizedExperiment))
+suppressPackageStartupMessages(library(edgeR))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(patchwork))
+
+datafiles <- here("results", "PRJNA753518", "data-files", "01")
+figures <- here("results", "PRJNA753518", "figures", "01")
+rdsfiles <- here("results", "PRJNA753518", "rds-files", "01")
+
+invisible(sapply(c(datafiles, figures, rdsfiles), dir.create, showWarnings=F, recursive=T))
+```
+
+## Read in `rmskProfiler` counts
+
+```{r}
+se <- readRDS(here("data", "PRJNA753518", "03_rmskProfiler", "se.rds"))
+rowData(se)$Ranges <- NULL
+```
+
+## Read in metadata and align with SE
+
+```{r}
+metadata <- fread(here("doc", "PRJNA753518_SraRunTable.csv"))
+metadata <- janitor::clean_names(metadata)
+metadata <- metadata[assay_type == "RNA-Seq"]
+```
+
+Collapse and align metadata to assays. 
+
+```{r}
+setDF(metadata, rownames=metadata$geo_accession_exp)
+metadata <- metadata[colnames(se), ]
+colData(se) <- cbind(colData(se), metadata)
+```
+
+Responder status needed to be pulled from GEO:
+
+- GSM5512434	PD1-001-KH_RNA
+- GSM5512437	PD1-003-TF2_RNA
+- GSM5512440	PD1-019-WC_RNA
+- GSM5512443	PD1-020-JS_RNA
+- GSM5512446	PD1-027-SD_RNA
+- GSM5512449	PD1-004-SS_RNA
+- GSM5512452	PD1-005-ET_RNA
+- GSM5512455	PD1-011-MD_RNA
+- GSM5512458	PD1-017-JH_RNA
+- GSM5512461	PD1-032-AR_RNA
+
+The responder status was then listed in the supplementary table of the publication or in the 
+[clinical data](https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE181815&format=file&file=GSE181815%5FClinicalData%2Exlsx) 
+from GEO
+
+## Filter for expression
+
+```{r}
+se$response <- ifelse(
+    se$geo_accession_exp %chin% c("GSM5512449", "GSM5512452", "GSM5512455", "GSM5512458"), 
+    yes = "R", 
+    no = "NR"
+    )
+keep <- filterByExpr(se, group=se$response)
+se <- se[keep, ]
+```
+
+## Compute TPM values
+
+Use lengths imported from `catchSalmon`
+
+```{r}
+feature_length <- metadata(se)$annotation[rownames(se), ]$Length
+x <- assay(se, "counts") / feature_length
+assay(se, "tpm") <- t( t(x) * 1e6 / colSums(x) )
+
+# Create log2 TPMs as well
+assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
+```
+
+## Save the final SE object for meta-analysis
+
+```{r}
+saveRDS(se, here(rdsfiles, "processed-se.rds"))
+```

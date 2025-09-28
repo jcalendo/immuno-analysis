@@ -1,0 +1,104 @@
+---
+title: PRJNA476140 Analysis
+format: html
+author: Gennaro Calendo
+---
+
+Import and prepare counts and sample metadata
+
+## Set up
+
+```{r}
+suppressPackageStartupMessages(library(here))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(SummarizedExperiment))
+suppressPackageStartupMessages(library(edgeR))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(patchwork))
+
+datafiles <- here("results", "PRJNA476140", "data-files", "01")
+figures <- here("results", "PRJNA476140", "figures", "01")
+rdsfiles <- here("results", "PRJNA476140", "rds-files", "01")
+
+invisible(sapply(c(datafiles, figures, rdsfiles), dir.create, showWarnings=F, recursive=T))
+```
+
+## Read in `rmskProfiler` counts
+
+```{r}
+se <- readRDS(here("data", "PRJNA476140", "03_rmskProfiler", "se.rds"))
+rowData(se)$Ranges <- NULL
+```
+
+## Read in metadata and align with SE
+
+```{r}
+metadata <- fread(here("doc", "PRJNA476140_SraRunTable.csv"))
+metadata <- janitor::clean_names(metadata)
+```
+
+Align with SE object and add as object metadata
+
+```{r}
+setDF(metadata, rownames=metadata$geo_accession_exp)
+metadata <- metadata[colnames(se), ]
+colData(se) <- cbind(colData(se), metadata)
+```
+
+## Filter for expression
+
+```{r}
+keep <- filterByExpr(se, group=se$response)
+se <- se[keep, ]
+```
+
+## Compute TPM values
+
+Use lengths imported from `catchSalmon`
+
+```{r}
+feature_length <- metadata(se)$annotation[rownames(se), ]$Length
+x <- assay(se, "counts") / feature_length
+assay(se, "tpm") <- t( t(x) * 1e6 / colSums(x) )
+
+# Create log2 TPMs as well
+assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
+```
+
+## Compute batch-effect corrected log TPMs
+
+The largest differences by PCA seem to be between batch 1 and batches 2-4. There are only 3 
+responders in this dataset so the batch correction cannot be estimated across all batch factor 
+levels. I think combining batches into 1 and 2-4 might work
+
+```{r}
+se$batch2 <- ifelse(se$batch == 1, "1", "2-4")
+design0 <- model.matrix(~patient_id + treatment_state + timepoint, data = colData(se))
+assay(se, "ltpm") <- limma::removeBatchEffect(assay(se, "ltpm"), batch=se$batch2, design=design0)
+```
+
+The samples cluster mostly by patient_id. I'm not sure how useful this data will be because of the 
+labeling inconsistencies.
+
+```{r}
+pca_res <- PCAtools::pca(
+    assay(se, "ltpm"), 
+    metadata=colData(se), 
+    scale=TRUE,
+    center=TRUE,
+    removeVar=0.9
+    )
+
+b1 <- PCAtools::biplot(pca_res, colby="response", legendPosition="bottom", lab=NULL)
+b2 <- PCAtools::biplot(pca_res, colby="batch2", legendPosition="bottom", lab=NULL)
+b3 <- PCAtools::biplot(pca_res, colby="patient_id", legendPosition="bottom", lab=NULL)
+b4 <- PCAtools::biplot(pca_res, colby="treatment_state", legendPosition="bottom", lab=NULL)
+
+(b1 | b2) / (b3 | b4) 
+```
+
+## Save the final SE object for meta-analysis
+
+```{r}
+saveRDS(se, here(rdsfiles, "processed-se.rds"))
+```

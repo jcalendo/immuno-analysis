@@ -1,0 +1,85 @@
+---
+title: PRJNA762343 Analysis
+format: html
+author: Gennaro Calendo
+---
+
+Import and prepare counts and sample metadata
+
+## Set up
+
+```{r}
+suppressPackageStartupMessages(library(here))
+suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(SummarizedExperiment))
+suppressPackageStartupMessages(library(edgeR))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(patchwork))
+
+datafiles <- here("results", "PRJNA762343", "data-files", "01")
+figures <- here("results", "PRJNA762343", "figures", "01")
+rdsfiles <- here("results", "PRJNA762343", "rds-files", "01")
+
+invisible(sapply(c(datafiles, figures, rdsfiles), dir.create, showWarnings=F, recursive=T))
+```
+
+## Read in `rmskProfiler` counts
+
+```{r}
+se <- readRDS(here("data", "PRJNA762343", "03_rmskProfiler", "se.rds"))
+rowData(se)$Ranges <- NULL
+```
+
+## Read in metadata and align with SE
+
+```{r}
+metadata <- fread(here("doc", "PRJNA762343_SraRunTable.csv"))
+metadata <- janitor::clean_names(metadata)
+```
+
+They did not include clinical data in run info. Read in from GEO and supp info
+
+```{r}
+clinical <- readxl::read_excel(here("doc", "GSE183924_Clinical_Data_with_CIBERSORT_analysis_for_GEO.xlsx"))
+clinical <- janitor::clean_names(clinical)
+
+metadata <- merge(
+    x = metadata,
+    y = clinical,
+    by.x = "patient_id",
+    by.y = "patient_id",
+    all.x = TRUE
+    )
+
+setDF(metadata, rownames=metadata$geo_accession_exp)
+metadata <- metadata[colnames(se), ]
+colData(se) <- cbind(colData(se), metadata)
+```
+
+## Filter for expression
+
+Their endpoint was relapse free survival at one year so use that
+
+```{r}
+keep <- filterByExpr(se, group=se$rfs_censor)
+se <- se[keep, ]
+```
+
+## Compute TPM values
+
+Use lengths imported from `catchSalmon`
+
+```{r}
+feature_length <- metadata(se)$annotation[rownames(se), ]$Length
+x <- assay(se, "counts") / feature_length
+assay(se, "tpm") <- t( t(x) * 1e6 / colSums(x) )
+
+# Create log2 TPMs as well
+assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
+```
+
+## Save the final SE object for meta-analysis
+
+```{r}
+saveRDS(se, here(rdsfiles, "processed-se.rds"))
+```
