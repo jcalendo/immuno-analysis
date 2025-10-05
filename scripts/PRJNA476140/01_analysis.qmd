@@ -9,12 +9,12 @@ Import and prepare counts and sample metadata
 ## Set up
 
 ```{r}
+suppressPackageStartupMessages(library(coriell))
 suppressPackageStartupMessages(library(here))
 suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(ggplot2))
 suppressPackageStartupMessages(library(SummarizedExperiment))
 suppressPackageStartupMessages(library(edgeR))
-suppressPackageStartupMessages(library(ggplot2))
-suppressPackageStartupMessages(library(patchwork))
 
 datafiles <- here("results", "PRJNA476140", "data-files", "01")
 figures <- here("results", "PRJNA476140", "figures", "01")
@@ -45,60 +45,111 @@ metadata <- metadata[colnames(se), ]
 colData(se) <- cbind(colData(se), metadata)
 ```
 
-## Filter for expression
+## Remove any TEs within exons 
 
 ```{r}
-keep <- filterByExpr(se, group=se$response)
-se <- se[keep, ]
+# Select hash IDs in exons to drop
+drop_te <- subset(rowData(se), 
+  !is.na(Hash) & (hasUnstrandedExonic == TRUE | hasUnstranded3UTR == TRUE | hasUnstranded5UTR == TRUE),
+  select = "Hash",
+  drop = TRUE
+  )
+
+se <- se[!rownames(se) %chin% drop_te, ]
 ```
 
-## Compute TPM values
+## Remove single patient sample
 
-Use lengths imported from `catchSalmon`
+So we can potentially fix a lme model if needed
 
 ```{r}
-feature_length <- metadata(se)$annotation[rownames(se), ]$Length
-x <- assay(se, "counts") / feature_length
-assay(se, "tpm") <- t( t(x) * 1e6 / colSums(x) )
-
-# Create log2 TPMs as well
-assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
+se <- se[, se$patient_id != "MGH Patient 148"]
 ```
 
-## Compute batch-effect corrected log TPMs
+## `edgeR/limma` pipeline
 
-The largest differences by PCA seem to be between batch 1 and batches 2-4. There are only 3 
+### Filter for expression
+
+```{r}
+y <- SE2DGEList(se)
+y$samples$group <- y$samples$response
+
+keep <- filterByExpr(y)
+y <- y[keep,,keep.lib.sizes=FALSE]
+```
+
+### Compute TMM scaling factors
+
+```{r}
+y <- normLibSizes(y)
+```
+
+### Compute batch-effect corrected log TPMs
+
+Show MDs plot
+
+```{r}
+png(here(figures, "mds.png"), width=6, height=5, units="in", res=300)
+plotMDS(y, col=factor(y$samples$batch), pch=19, main="By Batch")
+legend("top", legend=c("1", "2", "3", "4"), col=palette()[1:4], pch=19)
+dev.off()
+```
+
+The largest differences by MDS seem to be between batch 1 and batches 2-4. There are only 3 
 responders in this dataset so the batch correction cannot be estimated across all batch factor 
-levels. I think combining batches into 1 and 2-4 might work
+levels. I think combining batches into 1 and 2-4 might work. 
 
 ```{r}
-se$batch2 <- ifelse(se$batch == 1, "1", "2-4")
-design0 <- model.matrix(~patient_id + treatment_state + timepoint, data = colData(se))
-assay(se, "ltpm") <- limma::removeBatchEffect(assay(se, "ltpm"), batch=se$batch2, design=design0)
+lcpm <- cpm(y, log=TRUE)
+
+y$samples$batch2 <- ifelse(y$samples$batch == 1, "1", "234")
+design0 <- model.matrix(~patient_id + treatment_state + timepoint, data = y$samples)
+lcpm.c <- limma::removeBatchEffect(lcpm, batch=y$samples$batch2, design=design0)
 ```
 
-The samples cluster mostly by patient_id. I'm not sure how useful this data will be because of the 
-labeling inconsistencies.
+Show MDS after batch adjustment. This removes the apparent batch effect but does not account for 
+the repeated measures design of the experiment. 
 
 ```{r}
-pca_res <- PCAtools::pca(
-    assay(se, "ltpm"), 
-    metadata=colData(se), 
-    scale=TRUE,
-    center=TRUE,
-    removeVar=0.9
-    )
+png(here(figures, "mds2.png"), width=6, height=5, units="in", res=300)
+plotMDS(lcpm.c, col=factor(y$samples$batch), pch=19, main="By Batch (Corrected)")
+legend("top", legend=c("1", "2", "3", "4"), col=palette()[1:4], pch=19)
+dev.off()
+```
 
-b1 <- PCAtools::biplot(pca_res, colby="response", legendPosition="bottom", lab=NULL)
-b2 <- PCAtools::biplot(pca_res, colby="batch2", legendPosition="bottom", lab=NULL)
-b3 <- PCAtools::biplot(pca_res, colby="patient_id", legendPosition="bottom", lab=NULL)
-b4 <- PCAtools::biplot(pca_res, colby="treatment_state", legendPosition="bottom", lab=NULL)
+### fit model with limma::voom()
 
-(b1 | b2) / (b3 | b4) 
+We need to work in the repeated measures design. This can be accomplished with 
+`limma::duplicateCorrelation()`
+
+```{r}
+design <- model.matrix(~response + timepoint + batch2, data = y$samples)
+v <- voom(y, design)
+
+# Estimate the correlation between patients sampled more than once
+cor <- duplicateCorrelation(v, design, block = y$samples$patient_id)
+
+# Update the quality weights and new correlation structure
+v <- voom(y, design, plot = TRUE, block = y$samples$patient_id, correlation = cor$consensus.correlation)
+cor <- duplicateCorrelation(v, design, block = y$samples$patient_id)
+
+# Fit the model
+fit <- lmFit(v, design, block = y$samples$patient_id, correlation = cor$consensus.correlation)
+fit2 <- eBayes(fit, trend=TRUE, robust=TRUE)
+
+# Test for differential expression
+results <- topTable(fit2, coef=2, number=Inf, sort="none")
 ```
 
 ## Save the final SE object for meta-analysis
 
 ```{r}
-saveRDS(se, here(rdsfiles, "processed-se.rds"))
+processed <- SummarizedExperiment(
+    assays = list(counts = y$counts, logcounts = lcpm.c),
+    colData = y$samples,
+    rowData = y$genes,
+    metadata = list(results=results, fit=fit2, design=design, dupcor=cor)
+)
+
+saveRDS(processed, here(rdsfiles, "processed-se.rds"))
 ```
