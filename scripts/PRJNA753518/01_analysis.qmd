@@ -9,12 +9,12 @@ Import and prepare counts and sample metadata
 ## Set up
 
 ```{r}
+suppressPackageStartupMessages(library(coriell))
 suppressPackageStartupMessages(library(here))
 suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(ggplot2))
 suppressPackageStartupMessages(library(SummarizedExperiment))
 suppressPackageStartupMessages(library(edgeR))
-suppressPackageStartupMessages(library(ggplot2))
-suppressPackageStartupMessages(library(patchwork))
 
 datafiles <- here("results", "PRJNA753518", "data-files", "01")
 figures <- here("results", "PRJNA753518", "figures", "01")
@@ -71,25 +71,82 @@ se$response <- ifelse(
     yes = "R", 
     no = "NR"
     )
-keep <- filterByExpr(se, group=se$response)
-se <- se[keep, ]
 ```
 
-## Compute TPM values
-
-Use lengths imported from `catchSalmon`
+## Remove any TEs within exons 
 
 ```{r}
-feature_length <- metadata(se)$annotation[rownames(se), ]$Length
-x <- assay(se, "counts") / feature_length
-assay(se, "tpm") <- t( t(x) * 1e6 / colSums(x) )
+# Select hash IDs in exons to drop
+drop_te <- subset(rowData(se), 
+  !is.na(Hash) & (hasUnstrandedExonic == TRUE | hasUnstranded3UTR == TRUE | hasUnstranded5UTR == TRUE),
+  select = "Hash",
+  drop = TRUE
+  )
 
-# Create log2 TPMs as well
-assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
+se <- se[!rownames(se) %chin% drop_te, ]
+```
+
+## `edgeR` pipeline
+
+### Filter for expression
+
+```{r}
+y <- SE2DGEList(se)
+y$samples$group <- factor(y$samples$response, levels=c("NR", "R"))
+
+keep <- filterByExpr(y)
+y <- y[keep,,keep.lib.sizes=FALSE]
+```
+
+### Compute TMM scaling factors
+
+```{r}
+y <- normLibSizes(y)
+```
+
+Show the MDS plot of the normalized counts. 
+
+```{r}
+png(here(figures, "mds.png"), width=6, height=5, units="in", res=300)
+plotMDS(y, col=y$samples$group, pch=19, main="By Response")
+legend("top", legend=levels(y$samples$group), col=palette()[1:2], pch=19)
+dev.off()
+```
+
+Show QC plots
+
+```{r}
+lcpm <- cpm(y, log=TRUE)
+
+coriell::plot_boxplot(lcpm, metadata=y$samples, fillBy="response", rle=TRUE)
+ggsave(here(figures, "rle-boxplot.png"), width=9, height=6)
+
+coriell::plot_density(lcpm, metadata=y$samples, colBy="response")
+ggsave(here(figures, "lib-density.png"), width=9, height=6)
+```
+
+### Perform DE testing
+
+```{r}
+design <- model.matrix(~group, data=y$samples)
+fit <- glmQLFit(y, design=design, robust=TRUE)
+
+# Test for differential expression
+r_vs_nr <- glmQLFTest(fit, coef=2) 
+
+# Combine all results into a list of data.frames
+results <- list("responder_vs_nonresponder" = edger_to_df(r_vs_nr))
 ```
 
 ## Save the final SE object for meta-analysis
 
 ```{r}
-saveRDS(se, here(rdsfiles, "processed-se.rds"))
+processed <- SummarizedExperiment(
+    assays = list(counts = y$counts, logcounts = lcpm),
+    colData = y$samples,
+    rowData = y$genes,
+    metadata = list(results=results, fit=fit, design=design)
+)
+
+saveRDS(processed, here(rdsfiles, "processed-se.rds"))
 ```
