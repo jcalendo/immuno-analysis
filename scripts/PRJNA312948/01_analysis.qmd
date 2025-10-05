@@ -9,12 +9,12 @@ Import and prepare counts and sample metadata
 ## Set up
 
 ```{r}
+suppressPackageStartupMessages(library(coriell))
 suppressPackageStartupMessages(library(here))
 suppressPackageStartupMessages(library(data.table))
+suppressPackageStartupMessages(library(ggplot2))
 suppressPackageStartupMessages(library(SummarizedExperiment))
 suppressPackageStartupMessages(library(edgeR))
-suppressPackageStartupMessages(library(ggplot2))
-suppressPackageStartupMessages(library(patchwork))
 
 datafiles <- here("results", "PRJNA312948", "data-files", "01")
 figures <- here("results", "PRJNA312948", "figures", "01")
@@ -24,6 +24,8 @@ invisible(sapply(c(datafiles, figures, rdsfiles), dir.create, showWarnings=F, re
 ```
 
 ## Read in `rmskProfiler` counts
+
+rowRanges can be dropped to save space
 
 ```{r}
 se <- readRDS(here("data", "PRJNA312948", "03_rmskProfiler", "se.rds"))
@@ -62,24 +64,17 @@ metadata <- metadata[colnames(se), ]
 colData(se) <- cbind(colData(se), metadata)
 ```
 
-## Filter for expression
+## Remove any TEs within exons 
 
 ```{r}
-keep <- filterByExpr(se, group=se$response)
-se <- se[keep, ]
-```
+# Select hash IDs in exons to drop
+drop_te <- subset(rowData(se), 
+  !is.na(Hash) & (hasUnstrandedExonic == TRUE | hasUnstranded3UTR == TRUE | hasUnstranded5UTR == TRUE),
+  select = "Hash",
+  drop = TRUE
+  )
 
-## Compute TPM values
-
-Use lengths imported from `catchSalmon`
-
-```{r}
-feature_length <- metadata(se)$annotation[rownames(se), ]$Length
-x <- assay(se, "counts") / feature_length
-assay(se, "tpm") <- t( t(x) * 1e6 / colSums(x) )
-
-# Create log2 TPMs as well
-assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
+se <- se[!rownames(se) %chin% drop_te, ]
 ```
 
 ## Drop single duplicated sample
@@ -88,62 +83,97 @@ assay(se, "ltpm") <- log2(assay(se, "tpm") + 1)
 se <- se[, se$biopsy_time != "on-treatment"]
 ```
 
-## EDA
+## `edgeR` pipeline
 
-Most of the variation on PC1 is technical, driven by the RNA-seq prep type. 
+### Filter for expression
 
 ```{r}
-pca_res <- PCAtools::pca(
-    assay(se, "ltpm"), 
-    metadata=colData(se), 
-    scale=TRUE, 
-    center=TRUE, 
-    removeVar=0.9
-    )
+y <- SE2DGEList(se)
+y$samples$group <- y$samples$response
 
-b1 <- PCAtools::biplot(pca_res, colby="response", legendPosition="bottom", lab=NULL)
-b2 <- PCAtools::biplot(pca_res, colby="stranded_unstranded_rnaseq", legendPosition="bottom", lab=NULL)
-b3 <- PCAtools::biplot(pca_res, colby="disease_status", legendPosition="bottom", lab=NULL)
-b4 <- PCAtools::biplot(pca_res, colby="gender", legendPosition="bottom", lab=NULL)
-
-(b1 | b2) / (b3 | b4) 
+keep <- filterByExpr(y)
+y <- y[keep,,keep.lib.sizes=FALSE]
 ```
 
-## Compute batch-corrected log TPMS
-
-Use limma to regress away the known batch effects
+### Compute TMM scaling factors
 
 ```{r}
-design0 <- model.matrix(~response + gender + disease_status, data=colData(se))
-
-assay(se, "ltpm") <- limma::removeBatchEffect(
-    assay(se, "ltpm"), 
-    batch=se$stranded_unstranded_rnaseq, 
-    design = design0
-    )
+y <- normLibSizes(y)
 ```
 
-Recompute PCA. This looks better. The obvious technical RNA-seq prep factor has been removed
+Show the MDS plot of the normalized counts. There is a batch effect by the stranded sv unstranded 
+protocols.
 
 ```{r}
-pca_res <- PCAtools::pca(
-    assay(se, "ltpm"), 
-    metadata=colData(se), 
-    scale=TRUE,
-    center=TRUE,
-    removeVar=0.9
+png(here(figures, "mds.png"), width=6, height=5, units="in", res=300)
+plotMDS(y, col=factor(y$samples$stranded_unstranded_rnaseq), pch=19, main="By Batch")
+legend("topright", legend=c("stranded", "unstranded"), col=palette()[1:2], pch=19)
+dev.off()
+```
+
+Use limma to regress away the known batch effects.
+
+```{r}
+design0 <- model.matrix(~response, data=colData(se))
+lcpm <- cpm(y, log=TRUE)
+lcpm.c <- limma::removeBatchEffect(lcpm, batch=y$samples$stranded_unstranded_rnaseq, design = design0)
+```
+
+Show MDS plot on the corrected logCPMs. This addressed the batch issue. Batch is needed as a term 
+in the final model. 
+
+```{r}
+png(here(figures, "mds2.png"), width=6, height=5, units="in", res=300)
+plotMDS(lcpm.c, col=factor(y$samples$stranded_unstranded_rnaseq), pch=19, main="By Batch (Corrected)")
+legend("topright", legend=c("stranded", "unstranded"), col=palette()[1:2], pch=19)
+dev.off()
+```
+
+Do the other variables contribute to the variation? Not much on first component, at least.
+
+```{r}
+par(mfrow=c(2, 2))
+plotMDS(lcpm.c, col=factor(y$samples$gender), pch=19, main="By Sex")
+plotMDS(lcpm.c, col=factor(y$samples$vital_status), pch=19, main="By Vital Status")
+plotMDS(lcpm.c, col=factor(y$samples$disease_status), pch=19, main="By Disease Status")
+plotMDS(lcpm.c, col=factor(y$samples$response), pch=19, main="By Response")
+```
+
+Show QC plots
+
+```{r}
+coriell::plot_boxplot(lcpm.c, metadata=y$samples, fillBy="response", rle=TRUE)
+ggsave(here(figures, "rle-boxplot.png"), width=9, height=6)
+
+coriell::plot_density(lcpm.c, metadata=y$samples, colBy="response")
+ggsave(here(figures, "lib-density.png"), width=9, height=6)
+```
+
+### Perform DE testing
+
+```{r}
+y$samples$group <- factor(y$samples$group, levels=c("PD", "PR", "CR"))
+design <- model.matrix(~group + stranded_unstranded_rnaseq, data=y$samples)
+fit <- glmQLFit(y, design=design, robust=TRUE)
+
+pr_vs_pd <- glmQLFTest(fit, coef=2) 
+cr_vs_pd <- glmQLFTest(fit, coef=3)
+
+results <- list(
+    "PR_vs_PD" = edger_to_df(pr_vs_pd),
+    "CR_vs_PD" = edger_to_df(cr_vs_pd)
     )
-
-b1 <- PCAtools::biplot(pca_res, colby="response", legendPosition="bottom", lab=NULL)
-b2 <- PCAtools::biplot(pca_res, colby="stranded_unstranded_rnaseq", legendPosition="bottom", lab=NULL)
-b3 <- PCAtools::biplot(pca_res, colby="disease_status", legendPosition="bottom", lab=NULL)
-b4 <- PCAtools::biplot(pca_res, colby="gender", legendPosition="bottom", lab=NULL)
-
-(b1 | b2) / (b3 | b4) 
 ```
 
 ## Save the final SE object for meta-analysis
 
 ```{r}
-saveRDS(se, here(rdsfiles, "processed-se.rds"))
+processed <- SummarizedExperiment(
+    assays = list(counts = y$counts, logcounts = lcpm.c),
+    colData = y$samples,
+    rowData = y$genes,
+    metadata = list(results=results, fit=fit, design=design)
+)
+
+saveRDS(processed, here(rdsfiles, "processed-se.rds"))
 ```
