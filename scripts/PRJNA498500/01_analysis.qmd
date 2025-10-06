@@ -13,6 +13,7 @@ suppressPackageStartupMessages(library(coriell))
 suppressPackageStartupMessages(library(here))
 suppressPackageStartupMessages(library(data.table))
 suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(patchwork))
 suppressPackageStartupMessages(library(SummarizedExperiment))
 suppressPackageStartupMessages(library(edgeR))
 
@@ -120,6 +121,28 @@ na_vs_a <- glmQLFTest(fit, coef=2)
 
 # Combine all results into a list of data.frames
 results <- list("neoadjuvant_vs_adjuvant" = edger_to_df(na_vs_a))
+```
+
+Show differential expression plot
+
+```{r}
+# Transcripts
+v1 <- plot_volcano(subset(results[[1]], feature_id %like% "^ENST")) + 
+  labs(title = "Neoadjuvant vs Adjuvant")
+m1 <- plot_md(subset(results[[1]], feature_id %like% "^ENST")) + 
+  labs(title =  "Neoadjuvant vs Adjuvant")
+
+(v1 | m1)
+ggsave(here(figures, "differential-expression_tx.png"), width=12, height=6)
+
+# Transcripts
+v1 <- plot_volcano(subset(results[[1]], !feature_id %like% "^ENST")) + 
+  labs(title = "Neoadjuvant vs Adjuvant")
+m1 <- plot_md(subset(results[[1]], !feature_id %like% "^ENST")) + 
+  labs(title =  "Neoadjuvant vs Adjuvant")
+
+(v1 | m1)
+ggsave(here(figures, "differential-expression_te.png"), width=12, height=6)
 ```
 
 ## Save the final SE object for meta-analysis
