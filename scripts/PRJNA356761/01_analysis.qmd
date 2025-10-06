@@ -13,6 +13,7 @@ suppressPackageStartupMessages(library(coriell))
 suppressPackageStartupMessages(library(here))
 suppressPackageStartupMessages(library(data.table))
 suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(patchwork))
 suppressPackageStartupMessages(library(SummarizedExperiment))
 suppressPackageStartupMessages(library(edgeR))
 
@@ -131,6 +132,46 @@ results <- list(
     "PRCR_vs_SD" = edger_to_df(prcr_vs_sd),
     "SD_vs_PD" = edger_to_df(sd_vs_pd)
     )
+```
+
+Show differential expression plots
+
+```{r}
+# Transcripts
+v1 <- plot_volcano(subset(results[[1]], feature_id %like% "^ENST"), x_axis_limits=c(-10, 10), y_axis_limits=c(0, 12)) + 
+  labs(title = "PRCR vs PD")
+v2 <- plot_volcano(subset(results[[2]], feature_id %like% "^ENST"), x_axis_limits=c(-10, 10), y_axis_limits=c(0, 12)) + 
+  labs(title = "PRCR vs SD")
+v3 <- plot_volcano(subset(results[[3]], feature_id %like% "^ENST"), x_axis_limits=c(-10, 10), y_axis_limits=c(0, 12)) + 
+  labs(title = "SD vs PD")
+
+m1 <- plot_md(subset(results[[1]], feature_id %like% "^ENST"), y_axis_limits=c(-10, 10)) + 
+  labs(title = "PRCR vs PD")
+m2 <- plot_md(subset(results[[2]], feature_id %like% "^ENST"), y_axis_limits=c(-10, 10)) + 
+  labs(title = "PRCR vs SD")
+m3 <- plot_md(subset(results[[3]], feature_id %like% "^ENST"), y_axis_limits=c(-10, 10)) + 
+  labs(title = "SD vs PD")
+
+(v1 | v2 | v3) / (m1 | m2 | m3)
+ggsave(here(figures, "differential-expression_tx.png"), width=18, height=10)
+
+# TEs
+v1 <- plot_volcano(subset(results[[1]], !feature_id %like% "^ENST"), x_axis_limits=c(-6, 6), y_axis_limits=c(0, 6)) + 
+  labs(title = "PRCR vs PD")
+v2 <- plot_volcano(subset(results[[2]], !feature_id %like% "^ENST"), x_axis_limits=c(-6, 6), y_axis_limits=c(0, 6)) + 
+  labs(title = "PRCR vs SD")
+v3 <- plot_volcano(subset(results[[3]], !feature_id %like% "^ENST"), x_axis_limits=c(-6, 6), y_axis_limits=c(0, 6)) + 
+  labs(title = "SD vs PD")
+
+m1 <- plot_md(subset(results[[1]], !feature_id %like% "^ENST"), y_axis_limits=c(-6, 6)) + 
+  labs(title = "PRCR vs PD")
+m2 <- plot_md(subset(results[[2]], !feature_id %like% "^ENST"), y_axis_limits=c(-6, 6)) + 
+  labs(title = "PRCR vs SD")
+m3 <- plot_md(subset(results[[3]], !feature_id %like% "^ENST"), y_axis_limits=c(-6, 6)) + 
+  labs(title = "SD vs PD")
+
+(v1 | v2 | v3) / (m1 | m2 | m3)
+ggsave(here(figures, "differential-expression_te.png"), width=18, height=10)
 ```
 
 ## Save the final SE object for meta-analysis
