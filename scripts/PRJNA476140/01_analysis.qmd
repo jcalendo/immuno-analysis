@@ -118,6 +118,16 @@ legend("top", legend=c("1", "2", "3", "4"), col=palette()[1:4], pch=19)
 dev.off()
 ```
 
+Show QC plots
+
+```{r}
+coriell::plot_boxplot(lcpm.c, metadata=y$samples, fillBy="response", rle=TRUE)
+ggsave(here(figures, "rle-boxplot.png"), width=9, height=6)
+
+coriell::plot_density(lcpm.c, metadata=y$samples, colBy="response")
+ggsave(here(figures, "lib-density.png"), width=9, height=6)
+```
+
 ### fit model with limma::voom()
 
 We need to work in the repeated measures design. This can be accomplished with 
