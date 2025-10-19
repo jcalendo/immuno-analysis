@@ -1,6 +1,6 @@
 # Salmon with Gibbs sampling and all bias estimation by default
 salmon:
-  index_dir: "/mnt/data/gdata/rmskProfiler/hg38-resources/rmsk.salmon_index"
+  index_dir: "/home/gennaro/data/references/GRCh38/rmskProfiler/hg38-resources_v48/rmsk-salmon_index"
   lib_type: "A"
-  gibbs: 30
+  gibbs: 100
   extra_params: "--gcBias --seqBias --posBias --dumpEq"

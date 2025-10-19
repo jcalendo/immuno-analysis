@@ -143,9 +143,10 @@ rule import_quants:
     pe_quants = expand(f'{SALMON_OUT}/{{sample}}/quant.sf', sample=SAMPLES_PE),
     se_quants = expand(f'{SALMON_OUT}/{{sample}}/quant.sf', sample=SAMPLES_SE)
   output:
-    out_dir = RMSK_OUT
+    f"{RMSK_OUT}/se.rds"
   params:
-    quant_dir = SALMON_OUT
+    quant_dir = SALMON_OUT,
+    out_dir = RMSK_OUT
   shell:
-    "Rscript /home/gennaro/data/20250713_immuno-analysis/scripts/importQuants.R {params.quant_dir} {output.out_dir}"
+    "Rscript /home/gennaro/data/20250713_immuno-analysis/scripts/importQuants.R {params.quant_dir} {params.out_dir}"
 

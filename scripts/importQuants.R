@@ -11,7 +11,7 @@ args <- commandArgs(trailingOnly=TRUE)
 
 se <- rmskProfiler::importQuants(
   quant_dir = args[[1]], 
-  resource_dir = "/mnt/data/gdata/rmskProfiler/hg38-resources"
+  resource_dir = "/home/gennaro/data/references/GRCh38/rmskProfiler/hg38-resources_v48"
 )
 
 outfile <- file.path(args[[2]], "se.rds")
