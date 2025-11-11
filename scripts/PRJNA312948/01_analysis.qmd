@@ -21,7 +21,7 @@ datafiles <- here("results", "PRJNA312948", "data-files", "01")
 figures <- here("results", "PRJNA312948", "figures", "01")
 rdsfiles <- here("results", "PRJNA312948", "rds-files", "01")
 
-invisible(sapply(c(datafiles, figures, rdsfiles), dir.create, showWarnings=F, recursive=T))
+invisible(sapply(c(datafiles, figures, rdsfiles), dir.create, showWarnings = F, recursive = T))
 ```
 
 ## Read in `rmskProfiler` counts
@@ -50,17 +50,21 @@ batch effect to correct log normalized counts with. Recode response status based
  - Progressive disease (PD): At least a 20% increase in the sum of the LD of target lesions, taking as reference the smallest sum LD recorded since the treatment started or the appearance of one or more new lesions
 
 ```{r}
-metadata[, response := fcase(anti_pd_1_response == "Complete Response", "CR",
-                             anti_pd_1_response == "Partial Response", "PR",
-                             anti_pd_1_response == "Progressive Disease", "PD",
-                             anti_pd_1_response == "Stable disease", "SD",
-                             default = NA)]
+metadata[,
+  response := fcase(
+    anti_pd_1_response == "Complete Response"   , "CR" ,
+    anti_pd_1_response == "Partial Response"    , "PR" ,
+    anti_pd_1_response == "Progressive Disease" , "PD" ,
+    anti_pd_1_response == "Stable disease"      , "SD" ,
+    default = NA
+  )
+]
 ```
 
 Align with SE object and add as object metadata
 
 ```{r}
-setDF(metadata, rownames=metadata$geo_accession_exp)
+setDF(metadata, rownames = metadata$geo_accession_exp)
 metadata <- metadata[colnames(se), ]
 colData(se) <- cbind(colData(se), metadata)
 ```
@@ -69,11 +73,13 @@ colData(se) <- cbind(colData(se), metadata)
 
 ```{r}
 # Select hash IDs in exons to drop
-drop_te <- subset(rowData(se), 
-  !is.na(Hash) & (hasUnstrandedExonic == TRUE | hasUnstranded3UTR == TRUE | hasUnstranded5UTR == TRUE),
+drop_te <- subset(
+  rowData(se),
+  !is.na(Hash) &
+    (hasUnstrandedExonic == TRUE | hasUnstranded3UTR == TRUE | hasUnstranded5UTR == TRUE),
   select = "Hash",
   drop = TRUE
-  )
+)
 
 se <- se[!rownames(se) %chin% drop_te, ]
 ```
@@ -93,7 +99,10 @@ y <- SE2DGEList(se)
 y$samples$group <- y$samples$response
 
 keep <- filterByExpr(y)
-y <- y[keep,,keep.lib.sizes=FALSE]
+y <- y[keep, , keep.lib.sizes = FALSE]
+
+# Reorder by group for better visualization
+y <- y[, order(y$samples$group)]
 ```
 
 ### Compute TMM scaling factors
@@ -106,105 +115,188 @@ Show the MDS plot of the normalized counts. There is a batch effect by the stran
 protocols.
 
 ```{r}
-png(here(figures, "mds.png"), width=6, height=5, units="in", res=300)
-plotMDS(y, col=factor(y$samples$stranded_unstranded_rnaseq), pch=19, main="By Batch")
-legend("topright", legend=c("stranded", "unstranded"), col=palette()[1:2], pch=19)
+png(here(figures, "mds.png"), width = 6, height = 5, units = "in", res = 300)
+plotMDS(
+  y,
+  col = factor(y$samples$stranded_unstranded_rnaseq),
+  pch = 19,
+  main = "By Batch",
+  gene.selection = "common"
+)
+legend("topright", legend = c("stranded", "unstranded"), col = palette()[1:2], pch = 19)
 dev.off()
 ```
 
 Use limma to regress away the known batch effects.
 
 ```{r}
-design0 <- model.matrix(~response, data=colData(se))
-lcpm <- cpm(y, log=TRUE)
-lcpm.c <- limma::removeBatchEffect(lcpm, batch=y$samples$stranded_unstranded_rnaseq, design = design0)
+design0 <- model.matrix(~response, data = colData(se))
+lcpm <- cpm(y, log = TRUE)
+lcpm.c <- limma::removeBatchEffect(
+  lcpm,
+  batch = y$samples$stranded_unstranded_rnaseq,
+  design = design0
+)
 ```
 
 Show MDS plot on the corrected logCPMs. This addressed the batch issue. Batch is needed as a term 
 in the final model. 
 
 ```{r}
-png(here(figures, "mds2.png"), width=6, height=5, units="in", res=300)
-plotMDS(lcpm.c, col=factor(y$samples$stranded_unstranded_rnaseq), pch=19, main="By Batch (Corrected)")
-legend("topright", legend=c("stranded", "unstranded"), col=palette()[1:2], pch=19)
+png(here(figures, "mds2.png"), width = 6, height = 5, units = "in", res = 300)
+plotMDS(
+  lcpm.c,
+  col = factor(y$samples$stranded_unstranded_rnaseq),
+  pch = 19,
+  main = "By Batch (Corrected)",
+  gene.selection = "common"
+)
+legend("topright", legend = c("stranded", "unstranded"), col = palette()[1:2], pch = 19)
 dev.off()
 ```
 
 Do the other variables contribute to the variation? Not much on first component, at least.
 
 ```{r}
-par(mfrow=c(2, 2))
-plotMDS(lcpm.c, col=factor(y$samples$gender), pch=19, main="By Sex")
-plotMDS(lcpm.c, col=factor(y$samples$vital_status), pch=19, main="By Vital Status")
-plotMDS(lcpm.c, col=factor(y$samples$disease_status), pch=19, main="By Disease Status")
-plotMDS(lcpm.c, col=factor(y$samples$response), pch=19, main="By Response")
+par(mfrow = c(2, 2))
+plotMDS(
+  lcpm.c,
+  col = factor(y$samples$gender),
+  pch = 19,
+  main = "By Sex",
+  gene.selection = "common"
+)
+plotMDS(
+  lcpm.c,
+  col = factor(y$samples$vital_status),
+  pch = 19,
+  main = "By Vital Status",
+  gene.selection = "common"
+)
+plotMDS(
+  lcpm.c,
+  col = factor(y$samples$disease_status),
+  pch = 19,
+  main = "By Disease Status",
+  gene.selection = "common"
+)
+plotMDS(
+  lcpm.c,
+  col = factor(y$samples$response),
+  pch = 19,
+  main = "By Response",
+  gene.selection = "common"
+)
 ```
 
 Show QC plots
 
 ```{r}
-coriell::plot_boxplot(lcpm.c, metadata=y$samples, fillBy="response", rle=TRUE)
-ggsave(here(figures, "rle-boxplot.png"), width=9, height=6)
+png(here(figures, "rle-boxplot.png"), width = 9, height = 6, units = "in", res = 300)
+coriell::plot_boxplot2(lcpm.c, metadata = y$samples, fill_by = "response", rle = TRUE, las = 2)
+dev.off()
 
-coriell::plot_density(lcpm.c, metadata=y$samples, colBy="response")
-ggsave(here(figures, "lib-density.png"), width=9, height=6)
+png(here(figures, "lib-density.png"), width = 9, height = 6, units = "in", res = 300)
+coriell::plot_density2(lcpm.c, metadata = y$samples, col_by = "response")
+dev.off()
 ```
 
 ### Perform DE testing
 
 ```{r}
-y$samples$group <- factor(y$samples$group, levels=c("PD", "PR", "CR"))
-design <- model.matrix(~group + stranded_unstranded_rnaseq, data=y$samples)
-fit <- glmQLFit(y, design=design, robust=TRUE)
+y$samples$group <- factor(y$samples$group, levels = c("PD", "PR", "CR"))
+design <- model.matrix(~ group + stranded_unstranded_rnaseq, data = y$samples)
+fit <- glmQLFit(y, design = design, robust = TRUE)
 
-pr_vs_pd <- glmQLFTest(fit, coef=2) 
-cr_vs_pd <- glmQLFTest(fit, coef=3)
+pr_vs_pd <- glmQLFTest(fit, coef = 2)
+cr_vs_pd <- glmQLFTest(fit, coef = 3)
 
 results <- list(
-    "PR_vs_PD" = edger_to_df(pr_vs_pd),
-    "CR_vs_PD" = edger_to_df(cr_vs_pd)
-    )
+  "PR_vs_PD" = edger_to_df(pr_vs_pd),
+  "CR_vs_PD" = edger_to_df(cr_vs_pd)
+)
 ```
 
 Show volcano and MA plots of the DE results
 
 ```{r}
 # Transcripts
-v1 <- plot_volcano(subset(results[[1]], feature_id %like% "^ENST"), x_axis_limits=c(-10, 10), y_axis_limits=c(0, 4)) + 
+v1 <- plot_volcano(
+  subset(results[[1]], feature_id %like% "^ENST"),
+  x_axis_limits = c(-10, 10),
+  y_axis_limits = c(0, 4),
+  fdr = 0.1
+) +
   labs(title = "PR vs PD")
-v2 <- plot_volcano(subset(results[[2]], feature_id %like% "^ENST"), x_axis_limits=c(-10, 10), y_axis_limits=c(0, 4)) + 
+v2 <- plot_volcano(
+  subset(results[[2]], feature_id %like% "^ENST"),
+  x_axis_limits = c(-10, 10),
+  y_axis_limits = c(0, 4),
+  fdr = 0.1
+) +
   labs(title = "CR vs PD")
-m1 <- plot_md(subset(results[[1]], feature_id %like% "^ENST"), y_axis_limits=c(-10, 10)) + 
+m1 <- plot_md(
+  subset(results[[1]], feature_id %like% "^ENST"),
+  y_axis_limits = c(-10, 10),
+  fdr = 0.1
+) +
   labs(title = "PR vs PD")
-m2 <- plot_md(subset(results[[2]], feature_id %like% "^ENST"), y_axis_limits=c(-10, 10)) + 
+m2 <- plot_md(
+  subset(results[[2]], feature_id %like% "^ENST"),
+  y_axis_limits = c(-10, 10),
+  fdr = 0.1
+) +
   labs(title = "CR vs PD")
 
 (v1 | v2) / (m1 | m2)
-ggsave(here(figures, "differential-expression_tx.png"), width=12, height=10)
+ggsave(here(figures, "differential-expression_tx.png"), width = 12, height = 10)
 
 # TEs
-v1 <- plot_volcano(subset(results[[1]], !feature_id %like% "^ENST"), x_axis_limits=c(-10, 10), y_axis_limits=c(0, 3)) + 
+v1 <- plot_volcano(
+  subset(results[[1]], !feature_id %like% "^ENST"),
+  x_axis_limits = c(-10, 10),
+  y_axis_limits = c(0, 3),
+  fdr = 0.1
+) +
   labs(title = "PR vs PD")
-v2 <- plot_volcano(subset(results[[2]], !feature_id %like% "^ENST"), x_axis_limits=c(-10, 10), y_axis_limits=c(0, 3)) + 
+v2 <- plot_volcano(
+  subset(results[[2]], !feature_id %like% "^ENST"),
+  x_axis_limits = c(-10, 10),
+  y_axis_limits = c(0, 3),
+  fdr = 0.1
+) +
   labs(title = "CR vs PD")
-m1 <- plot_md(subset(results[[1]], !feature_id %like% "^ENST"), y_axis_limits=c(-10, 10)) + 
+m1 <- plot_md(
+  subset(results[[1]], !feature_id %like% "^ENST"),
+  y_axis_limits = c(-10, 10),
+  fdr = 0.1
+) +
   labs(title = "PR vs PD")
-m2 <- plot_md(subset(results[[2]], !feature_id %like% "^ENST"), y_axis_limits=c(-10, 10)) + 
+m2 <- plot_md(
+  subset(results[[2]], !feature_id %like% "^ENST"),
+  y_axis_limits = c(-10, 10),
+  fdr = 0.1
+) +
   labs(title = "CR vs PD")
 
 (v1 | v2) / (m1 | m2)
-ggsave(here(figures, "differential-expression_te.png"), width=12, height=10)
+ggsave(here(figures, "differential-expression_te.png"), width = 12, height = 10)
 ```
 
 ## Save the final SE object for meta-analysis
 
 ```{r}
 processed <- SummarizedExperiment(
-    assays = list(counts = y$counts, logcounts = lcpm.c),
-    colData = y$samples,
-    rowData = y$genes,
-    metadata = list(results=results, fit=fit, design=design)
+  assays = list(counts = y$counts, logcounts = lcpm.c),
+  colData = y$samples,
+  rowData = y$genes,
+  metadata = list(results = results, fit = fit, design = design)
 )
 
 saveRDS(processed, here(rdsfiles, "processed-se.rds"))
+```
+
+
+```{r}
+
 ```
